@@ -1,67 +1,42 @@
-# DevaClaudeCodeOpVentoy
+# DevaClaudeCodeOpVentoy — USB Werkplek
 
-> **Status: Experimenteel — werk in uitvoering**
+> Als de verbinding verbreekt: open deze pagina opnieuw en ga verder bij de stap waar je was gebleven.
 
-Claude Code als portable code companion op een Ventoy USB stick (256GB Kingston DataTraveler).
-Draait Xubuntu 25 live via Ventoy met persistente opslag zodat Claude Code al je instellingen en projecten onthoudt.
+## Wat bouwen we?
+
+Een **Kingston 256GB USB stick** die jouw complete werkplek is:
+- Werkt op elke willekeurige computer (gewoon insteken en opstarten)
+- **NixOS** als besturingssysteem (stabiel, alles configureerbaar)
+- **Claude Code** als AI coding assistent
+- **Gitea** (eigen GitHub op je USB)
+- **PostgreSQL** (eigen database)
+- Al je projecten staan op de USB
 
 ---
 
-## Doel
+## De stappen (klik voor details)
 
-Een volledig draagbare ontwikkelomgeving op een USB 3.0 stick waarbij:
-- Claude Code altijd beschikbaar is als AI coding companion
-- Projecten en configuratie bewaard blijven tussen sessies (Ventoy persistence)
-- Toegang tot externe systemen via SSH vanuit de USB omgeving
-- Geen afhankelijkheid van de host laptop (werkt op elke x86-64 machine)
+| # | Stap | Status |
+|---|------|--------|
+| 1 | [Voorbereiding: schijf bekijken](docs/STAP1-VOORBEREIDING.md) | ← Begin hier |
+| 2 | [NixOS starten vanuit Ventoy](docs/STAP2-NIXOS-LIVE.md) | Na stap 1 |
+| 3 | [NixOS installeren op USB](docs/STAP3-NIXOS-INSTALLATIE.md) | Na stap 2 |
+| 4 | [Claude Code instellen](docs/STAP4-CLAUDE-CODE.md) | Na stap 3 |
+| 5 | [Gitea + PostgreSQL instellen](docs/STAP5-GITEA-POSTGRES.md) | Na stap 4 |
 
-## Hardware
+---
 
-| Component | Details |
-|-----------|---------|
-| USB Stick | Kingston DataTraveler 256GB USB 3.0 |
-| Boot systeem | [Ventoy](https://www.ventoy.net/) |
-| OS | Xubuntu 25.04 (live met persistence) |
+## Huidige situatie
 
-## Structuur
+Je zit nu in **Xubuntu live** (opgestart via Ventoy).  
+Xubuntu is een tijdelijke omgeving — wijzigingen verdwijnen na herstart.  
+Dat is OK voor nu. We gaan stap voor stap NixOS permanent installeren.
 
-```
-DevaClaudeCodeOpVentoy/
-├── setup/
-│   ├── install-claude-code.sh      # Claude Code installeren op USB
-│   ├── ventoy-persistence.sh       # Ventoy persistence partition aanmaken
-│   └── ssh-config-template.sh      # SSH toegang tot je systemen instellen
-├── config/
-│   ├── claude-settings.json        # Claude Code instellingen template
-│   └── .env.template               # API sleutel template (nooit echte sleutels committen!)
-├── workspace/
-│   └── .gitkeep                    # Jouw projecten komen hier
-├── docs/
-│   └── SETUP_PLAN.md               # Stap-voor-stap handleiding
-└── README.md
-```
+---
 
-## Snelstart
+## Bij verbindingsverlies
 
-Zie [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md) voor de volledige handleiding.
-
-```bash
-# 1. Ventoy persistence instellen
-bash setup/ventoy-persistence.sh
-
-# 2. Claude Code installeren (in live Xubuntu sessie)
-bash setup/install-claude-code.sh
-
-# 3. API sleutel configureren
-cp config/.env.template ~/.claude/.env
-nano ~/.claude/.env   # Vul je ANTHROPIC_API_KEY in
-
-# 4. Starten
-claude
-```
-
-## Veiligheid
-
-- Sla **nooit** je Anthropic API key op in git
-- Gebruik `.env.template` als voorbeeld, vul de echte key in via de terminal
-- Zie `.gitignore` voor uitgesloten bestanden
+1. Start je USB opnieuw op (kies Xubuntu in Ventoy menu)
+2. Open Firefox → ga naar `github.com/nixdeva1-design/DevaClaudeCodeOpVentoy`
+3. Klik op de stap waar je mee bezig was in de tabel hierboven
+4. Ga verder
