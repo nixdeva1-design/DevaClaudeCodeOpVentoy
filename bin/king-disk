@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+# king-disk - NixOS CLI tool om de king schijf te detecteren en te beheren
+# Gebruik: king-disk [commando] [opties]
+
+set -euo pipefail
+
+VERSION="1.0.0"
+KING_LABEL="${KING_LABEL:-KING}"
+KING_CONFIG="${KING_CONFIG:-/etc/king-disk.conf}"
+
+# Kleuren
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+usage() {
+  cat <<EOF
+${BOLD}king-disk v${VERSION}${RESET} - NixOS king schijf beheer CLI
+
+${BOLD}GEBRUIK:${RESET}
+  king-disk [commando]
+
+${BOLD}COMMANDO'S:${RESET}
+  status          Toon huidige king schijf status
+  list            Lijst alle schijven en partities
+  find            Detecteer de king schijf automatisch
+  set <schijf>    Stel een schijf in als king (bijv. /dev/sda)
+  mount           Koppel de king schijf aan /mnt/king
+  umount          Ontkoppel de king schijf
+  info            Geef gedetailleerde info over de king schijf
+  where           Geef het huidige king schijf pad
+  shell           Open een shell in de king schijf mount
+  help            Toon deze hulptekst
+
+${BOLD}OMGEVINGSVARIABELEN:${RESET}
+  KING_LABEL      Schijflabel om op te zoeken (standaard: KING)
+  KING_CONFIG     Configuratiebestand pad (standaard: /etc/king-disk.conf)
+
+${BOLD}VOORBEELDEN:${RESET}
+  king-disk status
+  king-disk find
+  king-disk set /dev/sdb
+  king-disk mount && cd /mnt/king
+  KING_LABEL=ventoy king-disk find
+EOF
+}
+
+# Lees configuratie als die bestaat
+load_config() {
+  if [[ -f "$KING_CONFIG" ]]; then
+    # shellcheck source=/dev/null
+    source "$KING_CONFIG"
+  fi
+  if [[ -f "$HOME/.king-disk.conf" ]]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.king-disk.conf"
+  fi
+}
+
+# Sla de king schijf op in config
+save_king() {
+  local disk="$1"
+  local config_dir
+  config_dir="$(dirname "$HOME/.king-disk.conf")"
+  mkdir -p "$config_dir"
+  echo "KING_DISK=$disk" > "$HOME/.king-disk.conf"
+  echo -e "${GREEN}King schijf opgeslagen:${RESET} $disk"
+}
+
+# Haal de opgeslagen king schijf op
+get_saved_king() {
+  if [[ -f "$HOME/.king-disk.conf" ]]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.king-disk.conf"
+    echo "${KING_DISK:-}"
+  fi
+}
+
+# Zoek schijven op basis van label
+find_by_label() {
+  local label="$1"
+  local found=""
+
+  # Zoek via /dev/disk/by-label/
+  if [[ -e "/dev/disk/by-label/$label" ]]; then
+    found=$(readlink -f "/dev/disk/by-label/$label")
+    echo "$found"
+    return 0
+  fi
+
+  # Zoek via lsblk als backup
+  if command -v lsblk &>/dev/null; then
+    found=$(lsblk -o NAME,LABEL -rn 2>/dev/null | awk -v lbl="$label" '$2==lbl {print "/dev/"$1}' | head -1)
+    if [[ -n "$found" ]]; then
+      echo "$found"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Detecteer Ventoy schijf
+find_ventoy() {
+  local ventoy_disk=""
+
+  # Zoek via partitielabels die ventoy gebruikt
+  for label in "ventoy" "VTOYEFI" "Ventoy"; do
+    if [[ -e "/dev/disk/by-label/$label" ]]; then
+      # Haal de parent schijf op (niet de partitie)
+      local part
+      part=$(readlink -f "/dev/disk/by-label/$label")
+      # Strip partitienummer -> de schijf zelf
+      ventoy_disk=$(echo "$part" | sed 's/[0-9]*$//')
+      echo "$ventoy_disk"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# Commando: status
+cmd_status() {
+  echo -e "${BOLD}${CYAN}=== King Schijf Status ===${RESET}"
+  echo ""
+
+  local king=""
+  king=$(get_saved_king)
+
+  if [[ -z "$king" ]]; then
+    echo -e "${YELLOW}Geen king schijf ingesteld.${RESET}"
+    echo -e "Gebruik ${BOLD}king-disk find${RESET} of ${BOLD}king-disk set <schijf>${RESET}"
+  else
+    echo -e "${GREEN}${BOLD}King schijf:${RESET} $king"
+
+    if [[ -b "$king" ]]; then
+      echo -e "${GREEN}Status:${RESET} Beschikbaar"
+
+      if command -v lsblk &>/dev/null; then
+        echo ""
+        echo -e "${BOLD}Schijfinfo:${RESET}"
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$king" 2>/dev/null || true
+      fi
+    else
+      echo -e "${RED}Status:${RESET} Niet beschikbaar (schijf niet gevonden)"
+    fi
+
+    echo ""
+    if mountpoint -q /mnt/king 2>/dev/null; then
+      echo -e "${GREEN}Gekoppeld op:${RESET} /mnt/king"
+    else
+      echo -e "${YELLOW}Niet gekoppeld${RESET} (gebruik: king-disk mount)"
+    fi
+  fi
+  echo ""
+}
+
+# Commando: list
+cmd_list() {
+  echo -e "${BOLD}${CYAN}=== Beschikbare Schijven ===${RESET}"
+  echo ""
+
+  if ! command -v lsblk &>/dev/null; then
+    echo -e "${RED}lsblk niet gevonden.${RESET} Installeer util-linux."
+    exit 1
+  fi
+
+  local king=""
+  king=$(get_saved_king)
+
+  lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null
+
+  if [[ -n "$king" ]]; then
+    echo ""
+    echo -e "${GREEN}Huidige king schijf:${RESET} $king"
+  fi
+  echo ""
+}
+
+# Commando: find
+cmd_find() {
+  echo -e "${BOLD}${CYAN}=== King Schijf Detectie ===${RESET}"
+  echo ""
+
+  local found=""
+
+  # Stap 1: zoek op KING_LABEL
+  echo -e "Zoeken op label '${YELLOW}${KING_LABEL}${RESET}'..."
+  if found=$(find_by_label "$KING_LABEL" 2>/dev/null); then
+    echo -e "${GREEN}Gevonden via label:${RESET} $found"
+    save_king "$found"
+    return 0
+  fi
+
+  # Stap 2: zoek Ventoy
+  echo -e "Zoeken naar Ventoy schijf..."
+  if found=$(find_ventoy 2>/dev/null); then
+    echo -e "${GREEN}Ventoy schijf gevonden:${RESET} $found"
+    save_king "$found"
+    return 0
+  fi
+
+  # Stap 3: grootste USB-schijf als fallback
+  echo -e "Zoeken naar USB-schijven..."
+  if command -v lsblk &>/dev/null; then
+    # Zoek naar USB-transportschijven
+    local usb_disk
+    usb_disk=$(lsblk -d -o NAME,TRAN 2>/dev/null | awk '$2=="usb" {print "/dev/"$1}' | head -1)
+    if [[ -n "$usb_disk" ]]; then
+      echo -e "${GREEN}USB schijf gevonden:${RESET} $usb_disk"
+      save_king "$usb_disk"
+      return 0
+    fi
+  fi
+
+  echo -e "${RED}Geen king schijf gevonden.${RESET}"
+  echo -e "Gebruik ${BOLD}king-disk set /dev/sdX${RESET} om handmatig in te stellen."
+  exit 1
+}
+
+# Commando: set
+cmd_set() {
+  local disk="${1:-}"
+  if [[ -z "$disk" ]]; then
+    echo -e "${RED}Fout:${RESET} Geef een schijf op. Bijv: king-disk set /dev/sdb"
+    exit 1
+  fi
+
+  if [[ ! -b "$disk" ]]; then
+    echo -e "${RED}Fout:${RESET} '$disk' is geen geldig blokapparaat."
+    echo -e "Beschikbare schijven:"
+    lsblk -d -o NAME,SIZE,TYPE 2>/dev/null | grep disk || true
+    exit 1
+  fi
+
+  save_king "$disk"
+  echo ""
+  cmd_status
+}
+
+# Commando: mount
+cmd_mount() {
+  local king=""
+  king=$(get_saved_king)
+
+  if [[ -z "$king" ]]; then
+    echo -e "${RED}Fout:${RESET} Geen king schijf ingesteld. Gebruik eerst king-disk find of king-disk set."
+    exit 1
+  fi
+
+  if mountpoint -q /mnt/king 2>/dev/null; then
+    echo -e "${YELLOW}King schijf is al gekoppeld op /mnt/king${RESET}"
+    return 0
+  fi
+
+  echo -e "Koppelen van ${BOLD}$king${RESET} op /mnt/king..."
+
+  if [[ $EUID -ne 0 ]]; then
+    echo -e "${YELLOW}Root rechten vereist. Proberen via sudo...${RESET}"
+    sudo mkdir -p /mnt/king
+    sudo mount "$king" /mnt/king
+  else
+    mkdir -p /mnt/king
+    mount "$king" /mnt/king
+  fi
+
+  echo -e "${GREEN}King schijf gekoppeld op /mnt/king${RESET}"
+  echo -e "Gebruik ${BOLD}cd /mnt/king${RESET} of ${BOLD}king-disk shell${RESET}"
+}
+
+# Commando: umount
+cmd_umount() {
+  if ! mountpoint -q /mnt/king 2>/dev/null; then
+    echo -e "${YELLOW}King schijf is niet gekoppeld.${RESET}"
+    return 0
+  fi
+
+  echo -e "Ontkoppelen van /mnt/king..."
+  if [[ $EUID -ne 0 ]]; then
+    sudo umount /mnt/king
+  else
+    umount /mnt/king
+  fi
+  echo -e "${GREEN}King schijf ontkoppeld.${RESET}"
+}
+
+# Commando: info
+cmd_info() {
+  local king=""
+  king=$(get_saved_king)
+
+  echo -e "${BOLD}${CYAN}=== King Schijf Informatie ===${RESET}"
+  echo ""
+
+  if [[ -z "$king" ]]; then
+    echo -e "${YELLOW}Geen king schijf ingesteld.${RESET}"
+    exit 0
+  fi
+
+  echo -e "${BOLD}Schijf:${RESET} $king"
+  echo ""
+
+  if [[ -b "$king" ]]; then
+    if command -v lsblk &>/dev/null; then
+      echo -e "${BOLD}Partities:${RESET}"
+      lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINT "$king" 2>/dev/null || true
+      echo ""
+    fi
+
+    if command -v fdisk &>/dev/null; then
+      echo -e "${BOLD}Partitietabel:${RESET}"
+      if [[ $EUID -ne 0 ]]; then
+        sudo fdisk -l "$king" 2>/dev/null || echo "(sudo vereist voor fdisk)"
+      else
+        fdisk -l "$king" 2>/dev/null || true
+      fi
+    fi
+  else
+    echo -e "${RED}Schijf niet beschikbaar.${RESET}"
+  fi
+}
+
+# Commando: where
+cmd_where() {
+  local king=""
+  king=$(get_saved_king)
+
+  if [[ -z "$king" ]]; then
+    echo -e "${YELLOW}Geen king schijf ingesteld.${RESET}" >&2
+    exit 1
+  fi
+
+  echo "$king"
+}
+
+# Commando: shell
+cmd_shell() {
+  if ! mountpoint -q /mnt/king 2>/dev/null; then
+    echo -e "King schijf nog niet gekoppeld. Koppelen..."
+    cmd_mount
+  fi
+
+  echo -e "${GREEN}Opening shell in /mnt/king...${RESET}"
+  echo -e "(Typ ${BOLD}exit${RESET} om terug te gaan)"
+  echo ""
+
+  cd /mnt/king
+  KING_DISK="$(get_saved_king)" PS1="[king:/mnt/king]\$ " "${SHELL:-bash}" --norc
+}
+
+# Hoofd ingangspunt
+main() {
+  load_config
+
+  local cmd="${1:-status}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    status)   cmd_status ;;
+    list)     cmd_list ;;
+    find)     cmd_find ;;
+    set)      cmd_set "$@" ;;
+    mount)    cmd_mount ;;
+    umount|unmount) cmd_umount ;;
+    info)     cmd_info ;;
+    where)    cmd_where ;;
+    shell)    cmd_shell ;;
+    help|--help|-h) usage ;;
+    version|--version|-v) echo "king-disk v${VERSION}" ;;
+    *)
+      echo -e "${RED}Onbekend commando:${RESET} $cmd"
+      echo ""
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
